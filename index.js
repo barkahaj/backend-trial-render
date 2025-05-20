@@ -1,67 +1,60 @@
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
+const multer = require('multer');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'))); // serve uploaded images
+
+// Ensure uploads folder exists
+if (!fs.existsSync('./uploads')) {
+  fs.mkdirSync('./uploads');
+}
+
+// File upload config
+const storage = multer.diskStorage({
+  destination: './uploads/',
+  filename: (_, file, cb) => {
+    cb(null, Date.now() + '-' + file.originalname);
+  }
+});
+const upload = multer({ storage });
 
 let posts = require('./posts.json');
-let clients = [];
 
-// GET all posts
+// GET posts
 app.get('/posts', (req, res) => {
   res.json(posts);
 });
 
-// POST a new blog post
-app.post('/posts', (req, res) => {
+// POST with image
+app.post('/posts', upload.single('image'), (req, res) => {
+  const { title, content } = req.body;
+  const imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
+
   const newPost = {
     id: Date.now(),
-    title: req.body.title,
-    content: req.body.content
+    title,
+    content,
+    image: imageUrl
   };
+
   posts.push(newPost);
   fs.writeFileSync('./posts.json', JSON.stringify(posts, null, 2));
   res.status(201).json(newPost);
-  broadcastPosts(); // 🔔 send update to all SSE clients
 });
 
-// DELETE a blog post
+// DELETE
 app.delete('/posts/:id', (req, res) => {
   const postId = Number(req.params.id);
-  const index = posts.findIndex(post => post.id === postId);
-  if (index === -1) {
-    return res.status(404).json({ error: 'Post not found' });
-  }
-  posts.splice(index, 1);
+  posts = posts.filter(p => p.id !== postId);
   fs.writeFileSync('./posts.json', JSON.stringify(posts, null, 2));
   res.status(200).json({ message: 'Post deleted' });
-  broadcastPosts(); // 🔔 send update to all SSE clients
 });
-
-// SSE endpoint
-app.get('/stream', (req, res) => {
-  res.set({
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive'
-  });
-  res.flushHeaders();
-  clients.push(res);
-
-  // Remove client on close
-  req.on('close', () => {
-    clients = clients.filter(client => client !== res);
-  });
-});
-
-// Broadcast to all connected clients
-function broadcastPosts() {
-  const data = `data: ${JSON.stringify(posts)}\n\n`;
-  clients.forEach(client => client.write(data));
-}
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
